@@ -68,7 +68,7 @@ const struct option long_options[] =
 	{0, 0, 0, 0}
 };
 
-inline void Usage() // Print usage guide for user
+void Usage() // Print usage guide for user
 {
 	// Don't use TAB since it is different width on different platform.
 	// Only use space to align.
@@ -76,7 +76,7 @@ inline void Usage() // Print usage guide for user
 	        "webtest [option] URL\n"
 	        "  -c|--clients <n>         Run <n> HTTP clients at once. Default 1.\n"
 	        "  -f|--force               Don't wait for reply from server.\n"
-	        "  -h|--help             This information.\n"
+	        "  -h|--help                This information.\n"
 	        "  -p|--proxy <server:port> Use proxy server for request.\n"
 	        "  -r|--reload              Send reload request - Pragma: no-cache.\n"
 	        "  -t|--time <sec>          Run benchmark for <sec> seconds. Default 30.\n"
@@ -160,8 +160,10 @@ int FirstOccurIndex(const char *str, const char ch)
 	return FAIL;
 }
 
-int Socket(const char *host, int port) // Return socket if connect success, -1 on error.
+// Return socket if connect to <host:post> success, -1(FAIL) on error.
+int TcpConnect(const char *host, int port)
 {
+	// Step 1. Fill struct sockaddr_in.
 	struct sockaddr_in sa;
 	bzero(&sa, sizeof(sa));
 	sa.sin_family = AF_INET; // IPv4
@@ -183,11 +185,13 @@ int Socket(const char *host, int port) // Return socket if connect success, -1 o
 		memcpy(&sa.sin_addr, hp->h_addr, hp->h_length);
 	}
 
+	// Step 2. Create socket.
 	int sock = socket(AF_INET, SOCK_STREAM, 0); // IPv4 & TCP
-	if(sock == -1)
+	if(sock == FAIL)
 	{
 		return FAIL;
 	}
+	// Step 3. Connect to server.
 	if(connect(sock, (struct sockaddr *)&sa, sizeof(sa)) < 0)
 	{
 		return FAIL;
@@ -217,22 +221,25 @@ void HttpTransaction(const char *host, const int port, const char *request)
 			return; // Terminate this function.
 		}
 
-		if((socket = Socket(host, port)) == -1) // Create socket and connect to the server.
+		// Step 1. Create tcp connection to the server.
+		if((socket = TcpConnect(host, port)) == FAIL)
 		{
 			++failed;
 			continue;
 		}
-		if(req_len != write(socket, request, req_len)) // Send http request to the server.
+		// Step 2. Send http request to the server.
+		if(req_len != write(socket, request, req_len))
 		{
 			++failed;
 			close(socket);
 			continue;
 		}
-		if(force == 0) // Wait for reply from server.
+		// Step 3. Read reply from server if there is no force option.
+		if(force == 0)
 		{
 			for(; timer_expired == 0 && read_error == 0;) // Read all available data from socket
 			{
-				if((read_bytes = read(socket, buf, MAX_BUF_SIZE)) == -1) // read error
+				if((read_bytes = read(socket, buf, MAX_BUF_SIZE)) == FAIL) // read error
 				{
 					++failed;
 					close(socket);
@@ -250,7 +257,8 @@ void HttpTransaction(const char *host, const int port, const char *request)
 		}
 		if(read_error == 0) // If all read success.
 		{
-			if(close(socket) == -1) // Close error
+			// Step 4. Close tcp connection and continue loop.
+			if(close(socket) == FAIL) // Close error
 			{
 				++failed;
 				continue;
@@ -262,7 +270,7 @@ void HttpTransaction(const char *host, const int port, const char *request)
 
 void ParseArguments(int argc, char **argv)
 {
-	// Check whether there are enough command-line-arguments.
+	// Step 1. Check whether there are enough command-line-arguments.
 	if(argc == 1)
 	{
 		//printf("Should print Usage(), Omit.\n");
@@ -270,10 +278,11 @@ void ParseArguments(int argc, char **argv)
 		exit(BAD_PARAMETER);
 	}
 
-	// Parse command-line options
+	// Step 2. Parse command-line options
 	int option = 0; // Store return value from getopt_long()
 	int option_index = 0; // Index of which argv-element to parse, begin with 0
 	// If all arguments have been parsed, getopt_long will returns -1.
+	int colon_index; // Used to parse proxy:port.
 	while((option = getopt_long(argc, argv, "c:fhp:rt:v019", long_options, &option_index)) != -1)
 	{
 		switch(option)
@@ -296,7 +305,7 @@ void ParseArguments(int argc, char **argv)
 			// Return a pointer to the first occurrence of ':' in optarg
 			// TODO: Why webbench use `strrchr(optarg, ':');` that finds
 			// the last occurrence of ':' in optarg?
-			int colon_index = FirstOccurIndex(optarg, ':');
+			colon_index = FirstOccurIndex(optarg, ':');
 			proxy_host = optarg;
 			if(colon_index == FAIL) // ':' not find, parse next argument.
 			{
@@ -335,6 +344,7 @@ void ParseArguments(int argc, char **argv)
 		}
 	}
 
+	// Step 3. Check whether there has url.
 	if(optind == argc)
 	{
 		fprintf(stderr,"webtest: Missing URL!\n");
@@ -342,27 +352,57 @@ void ParseArguments(int argc, char **argv)
 		exit(BAD_PARAMETER);
 	}
 
-	// Deal with wrong arguments, reset to default value.
+	// Step 4. Deal with wrong arguments, reset to default value.
 	clients = (clients <= 0 ? 1 : clients);
 	test_time = (test_time <= 0 ? 30 : test_time);
 }
 
 void BuildRequest(const char *url)
 {
-	printf("URL = %s\n", url);
-	/*
-	* Format of a request message:
-	* <method> <request-URL> <version>"\r\n"
-	* <headers>"\r\n"
-	* "\r\n"
-	* <entity-body> // We don't need entity-body.
-	*/
+	//printf("URL = %s\n", url);
 
-	// Initialization: zero our host and request array
+	// Step 1. Check whether url is legal, URL syntax: `<scheme>://<host>:<port>/`
+	if(proxy_host == NULL) // Check <scheme> supplied by user.
+	{
+		// Scheme names are case-insensitive.
+		if(IgnoreCaseMatch(url, "http://") != 0)
+		{
+			fprintf(stderr, "\nOnly HTTP protocol is directly supported, set --proxy for others.\n");
+			exit(BAD_PARAMETER);
+		}
+	}
+	int first_colon = FindFirstSubstring(url, "://"); // The index of the first ':' appears in url.
+	if(first_colon == FAIL) // If "://" can't be found in url.
+	{
+		fprintf(stderr, "\n%s: is not a valid URL.\n", url);
+		exit(BAD_PARAMETER);
+	}
+	int url_host_begin = first_colon + 3; // Index where host name start: `://host:port/
+	// Index where `host:port` end, i.e., the index of '/' in the whole url.
+	int url_port_end = FirstOccurIndex(url + url_host_begin, '/') + url_host_begin;
+	// Host name must end with '/'
+	if(url_port_end == url_host_begin -1)
+	{
+		fprintf(stderr,"\nInvalid URL - host name must ends with '/'.\n");
+		exit(BAD_PARAMETER);
+	}
+	if(strlen(url) > MAX_URL_SIZE) // If url is too long.
+	{
+		fprintf(stderr,"URL is too long.\n");
+		exit(BAD_PARAMETER);
+	}
+
+	// Format of a request message:
+	//		<method> <request-URL> <version>"\r\n"
+	//		<headers>"\r\n"
+	//		"\r\n"
+	//		<entity-body>
+
+	// Step 2. Initialize(zero) host and request array.
 	bzero(host, MAX_HOST_NAME_SIZE);
 	bzero(request, MAX_REQUEST_SIZE);
 
-	// 1. Fill <method> field.
+	// Step 3. Fill <method> field.
 	switch(method)
 	{
 	default:
@@ -382,38 +422,7 @@ void BuildRequest(const char *url)
 	// Add the space between <method> and <request-URL>
 	*(request + (request_index++)) = ' ';
 
-	int first_colon = FindFirstSubstring(url, "://"); // The index of the first ':' appears in url.
-	// Check whether url is legal, URL syntax: `<scheme>://<host>:<port>/`
-	if(first_colon == -1) // If "://" can't be found in url.
-	{
-		fprintf(stderr, "\n%s: is not a valid URL.\n", url);
-		exit(BAD_PARAMETER);
-	}
-	if(strlen(url) > MAX_URL_SIZE) // If url is too long.
-	{
-		fprintf(stderr,"URL is too long.\n");
-		exit(BAD_PARAMETER);
-	}
-	if(proxy_host == NULL) // Check <scheme> supplied by user.
-	{
-		// Scheme names are case-insensitive.
-		if(IgnoreCaseMatch(url, "http://") != 0)
-		{
-			fprintf(stderr, "\nOnly HTTP protocol is directly supported, set --proxy for others.\n");
-			exit(BAD_PARAMETER);
-		}
-	}
-
-	// 2. Fill <request-URL> field
-	int url_host_begin = first_colon + 3; // Index where host name start: `://host:port/
-	// Index where `host:port` end, i.e., the index of '/' in the whole url.
-	int url_port_end = FirstOccurIndex(url + url_host_begin, '/') + url_host_begin;
-	// Host name must end with '/'
-	if(url_port_end == url_host_begin -1)
-	{
-		fprintf(stderr,"\nInvalid URL - host name must ends with '/'.\n");
-		exit(BAD_PARAMETER);
-	}
+	// Step 4. Fill <request-URL> field
 	if(proxy_host == NULL) // No proxy, parse host-name and port-number.
 	{
 		int second_colon = FirstOccurIndex(url + url_host_begin, ':') + url_host_begin;
@@ -428,7 +437,7 @@ void BuildRequest(const char *url)
 				port = port * 10 + *(url + index) - '0';
 			}
 			proxy_port = (port ? port : 80);
-			printf("proxy_port = %d\n", proxy_port);
+			//printf("proxy_port = %d\n", proxy_port);
 			url_host_end = second_colon;
 		}
 		// Get host name.
@@ -445,10 +454,10 @@ void BuildRequest(const char *url)
 		StrCopy(request, &request_index, url); // Fill <request-URL>
 	}
 
-	// 3. Fill <version> and this line's CRLF
+	//  Step 5. Fill <version> and this line's CRLF
 	StrCopy(request, &request_index, " HTTP/1.1\r\n");
 
-	// 4. Fill <headers>
+	//  Step 6. Fill <headers>
 	StrCopy(request, &request_index, "User-Agent: WebTest-Xiang Gao\r\n");
 	if(proxy_host == NULL) // Without proxy server, fill <Host:> header.
 	{
@@ -461,14 +470,13 @@ void BuildRequest(const char *url)
 		StrCopy(request, &request_index, "Pragma: no-cache\r\n");
 	}
 	StrCopy(request, &request_index, "Connection: close\r\n");
-	// Add an empty line after all headers and add '\0' to end request array.
+	// Step 7. Add an empty line after all headers and add '\0' to end request array.
 	StrCopy(request, &request_index, "\r\n\0");
-	printf("%s", request);
+	//printf("%s", request);
 }
 
-void PrintConfigure(char **argv)
+void PrintConfigure(char **argv) // Print test's configure information:
 {
-	// Print test's configure information:
 	// Testing: <method> <url> <version>\n
 	// With <clients> <time> <force> <proxy> <reload>
 	printf("Testing: ");
@@ -508,8 +516,8 @@ void PrintConfigure(char **argv)
 void TestServerState()
 {
 	// Check whether the server is working by one trying connection.
-	int check_socket = Socket(proxy_host ? proxy_host : host, proxy_port);
-	if(check_socket == -1)
+	int check_socket = TcpConnect(proxy_host ? proxy_host : host, proxy_port);
+	if(check_socket == FAIL)
 	{
 		fprintf(stderr, "Connect to server failed. Abort test.\n");
 		exit(SERVER_ERROR);
@@ -519,8 +527,8 @@ void TestServerState()
 
 void TestMain()
 {
-	// 1. Create pipe.
-	if(pipe(pc_pipe) == -1)
+	// Step 1. Create pipe.
+	if(pipe(pc_pipe) == FAIL)
 	{
 		// When library calls fail, we call perror() to print the
 		// message corresponding to current errno.
@@ -528,7 +536,7 @@ void TestMain()
 		exit(INTERNAL_ERROR);
 	}
 
-	// 2. Create children processes.
+	// Step 2. Create children processes.
 	pid_t pid = 0;
 	for(int cnt = 0; cnt < clients; ++cnt)
 	{
@@ -544,12 +552,12 @@ void TestMain()
 	}
 
 	FILE *fp = NULL; // Used by parent and children to read or write, respectively.
-	// For parent process:
+	// Step 3. For parent process:
 	// 1. Read test data through pipe from children.
 	// 2. Calculate and output the result.
 	if(pid > 0)
 	{
-		// 1. Read test data through pipe from children.
+		// Step 1. Read test data through pipe from children.
 		close(pc_pipe[1]); // Close write end.
 		if((fp = fdopen(pc_pipe[0], "r")) == NULL)
 		{
@@ -577,33 +585,33 @@ void TestMain()
 		}
 		fclose(fp);
 
-		// 2. Calculate and output the result.
-		printf("Speed = %d pages/min, %d bytes/sec.",
-		       (speed + failed)/test_time/60, bytes/test_time);
+		// Step 2. Calculate and output the result.
+		printf("Speed = %d pages/sec, %d bytes/sec.\n",
+		       (speed + failed)/test_time, bytes/test_time);
 		printf("Requests: %d success, %d failed.\n", speed, failed);
 		exit(SUCCESS);
 	}
-	// For child process:
+	/// Step 4. For child process:
 	// 1. Setup alarm signal handler.
 	// 2. Preform HTTP Transaction: connect-> write request-> read reply->close.
 	// 3. Write test data to parent through pipe.
 	if(pid == 0)
 	{
-		// 1. Setup alarm signal handler.
+		// Step 1. Setup alarm signal handler.
 		struct sigaction sa;
 		sa.sa_handler = alarm_handler;
 		sa.sa_flags = 0;
-		if(sigaction(SIGALRM, &sa, NULL) == -1)
+		if(sigaction(SIGALRM, &sa, NULL) == FAIL)
 		{
 			perror("sigaction(SIGALRM) error");
 			exit(INTERNAL_ERROR);
 		}
 		alarm(test_time);
 
-		// 2. Preform HTTP Transaction: connect-> write request-> read reply->close.
+		// Step 2. Preform HTTP Transaction: connect-> write request-> read reply->close.
 		HttpTransaction(proxy_host ? proxy_host : host, proxy_port, request);
 
-		// 3. Write test data to parent through pipe.
+		// Step 3. Write test data to parent through pipe.
 		close(pc_pipe[0]); // Close read end of pipe.
 		if((fp = fdopen(pc_pipe[1], "w")) == NULL)
 		{
@@ -621,15 +629,15 @@ int main(int argc, char **argv)
 	// On-line support.
 	printf("Visit Codes on Github: https://github.com/gaoxiangnumber1/webtest\n");
 
-	// 1. Parse arguments.
+	// Step 1. Parse arguments.
 	ParseArguments(argc, argv);
-	// 2. Build http request message.
+	// Step 2. Build http request message.
 	BuildRequest(argv[optind]);
-	// 3. Print this test's configure information.
+	// Step 3. Print this test's configure information.
 	PrintConfigure(argv);
-	// 4. Test whether server is working okay.
+	// Step 4. Test whether server is working okay.
 	TestServerState();
-	// 5. Real test.
+	// Step 5. Real test.
 	TestMain();
 
 	return SUCCESS;

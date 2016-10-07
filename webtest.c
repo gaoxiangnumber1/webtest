@@ -49,7 +49,7 @@ int pc_pipe[2]; // pc means parent-child
 // Test measurement data:
 int speed = 0, failed = 0, bytes = 0;
 // Timer
-volatile int timer_expired = 0; // TODO: why use `volatile`?
+volatile int timer_expired = 0; // TODO: Study `volatile` in Cpp-Primer $19.8.2 P1047
 // Max size of buffer that stores reply messages from server.
 #define MAX_BUF_SIZE 1500
 
@@ -213,7 +213,10 @@ void HttpTransaction(const char *host, const int port, const char *request)
 	{
 		if(timer_expired) // If have received alarm signal.
 		{
-			// TODO: what does following mean???
+			// When timer expired, os will send SIGALRM signal that will interrupt(errno = EINTR)
+			// slow system calls(connect, write, read and so on, see APUE.), that is, every time the
+			// timer expired, failed will increment by 1. So, when the timer expired and failed > 0, 
+			// we should subtract one from failed that caused by timer expired.
 			if(failed > 0)
 			{
 				--failed;
@@ -224,12 +227,14 @@ void HttpTransaction(const char *host, const int port, const char *request)
 		// Step 1. Create tcp connection to the server.
 		if((socket = TcpConnect(host, port)) == FAIL)
 		{
+			//perror("socket fail");
 			++failed;
 			continue;
 		}
 		// Step 2. Send http request to the server.
 		if(req_len != write(socket, request, req_len))
 		{
+			//perror("write fail");
 			++failed;
 			close(socket);
 			continue;
@@ -241,6 +246,7 @@ void HttpTransaction(const char *host, const int port, const char *request)
 			{
 				if((read_bytes = read(socket, buf, MAX_BUF_SIZE)) == FAIL) // read error
 				{
+					//perror("read error");
 					++failed;
 					close(socket);
 					read_error = 1;
@@ -260,6 +266,7 @@ void HttpTransaction(const char *host, const int port, const char *request)
 			// Step 4. Close tcp connection and continue loop.
 			if(close(socket) == FAIL) // Close error
 			{
+				//perror("close fail");
 				++failed;
 				continue;
 			}
@@ -268,7 +275,7 @@ void HttpTransaction(const char *host, const int port, const char *request)
 	}
 }
 
-void ParseArguments(int argc, char **argv)
+void ParseArguments(int argc, char **argv) // Step 1. Parse arguments.
 {
 	// Step 1. Check whether there are enough command-line-arguments.
 	if(argc == 1)
@@ -357,7 +364,7 @@ void ParseArguments(int argc, char **argv)
 	test_time = (test_time <= 0 ? 30 : test_time);
 }
 
-void BuildRequest(const char *url)
+void BuildRequest(const char *url) // Step 2. Build http request message.
 {
 	//printf("URL = %s\n", url);
 
@@ -475,7 +482,7 @@ void BuildRequest(const char *url)
 	//printf("%s", request);
 }
 
-void PrintConfigure(char **argv) // Print test's configure information:
+void PrintConfigure(char **argv) // Step 3. Print this test's configure information.
 {
 	// Testing: <method> <url> <version>\n
 	// With <clients> <time> <force> <proxy> <reload>
@@ -513,7 +520,7 @@ void PrintConfigure(char **argv) // Print test's configure information:
 	printf(".\n");
 }
 
-void TestServerState()
+void TestServerState() // Step 4. Test whether server is working okay.
 {
 	// Check whether the server is working by one trying connection.
 	int check_socket = TcpConnect(proxy_host ? proxy_host : host, proxy_port);
@@ -525,7 +532,7 @@ void TestServerState()
 	close(check_socket);
 }
 
-void TestMain()
+void TestMain() // Step 5. Real test.
 {
 	// Step 1. Create pipe.
 	if(pipe(pc_pipe) == FAIL)

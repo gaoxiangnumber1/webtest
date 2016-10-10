@@ -23,9 +23,11 @@ install: $(EXEC)
 		cp $(EXEC) $(INSTALLDIR);\
 		chmod 555 $(INSTALLDIR)/$(EXEC);\
 		echo "Installed in $(INSTALLDIR)";\
+		echo "Thanks for your use webtest-Xiang Gao.";\
 	else\
 		echo "Sorry, $(INSTALLDIR) does not exist.";\
 	fi
 
 uninstall:
-	@sudo rm $(INSTALLDIR)/$(EXEC)
+	@sudo rm $(INSTALLDIR)/$(EXEC);\
+	echo "Uninstall webtest. Thanks for your use webtest-Xiang Gao.";

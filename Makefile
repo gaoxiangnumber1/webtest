@@ -1,19 +1,22 @@
 CC = gcc
 INSTALLDIR = /usr/local/sbin
-FLAGS = -std=c99 -g -Wall
+CFLAGS =	-std=c99 -Wall -Wconversion -Werror -Wextra -Winline \
+					-Wno-unused-parameter -Wpointer-arith -Wunused-function \
+					-Wunused-value -Wunused-variable -Wwrite-strings
 
 all: webtest
+
 .SUFFIXES: .c .o
 
 SOURCE = webtest.c
 OBJECT = $(SOURCE:.c=.o)
 EXEC = webtest
 
-.c.o:
-	$(CC) $(FLAGS) -o $@ -c $<
-
 $(EXEC): $(OBJECT)
-	$(CC) $(FLAGS) -o $(EXEC) $(OBJECT)
+	$(CC) -o $@ $^
+
+.c.o:
+	$(CC) $(CFLAGS) -o $@ -c $<
 
 clean:
 	rm -f $(OBJECT) *~

@@ -3,7 +3,7 @@
 #include <stdio.h> // fprintf(), printf(), perror(), fdopen(), fclose(), setvbuf(), fscanf()
 #include <getopt.h> // getopt_long()
 #include <stdlib.h> // atoi(), exit()
-#include <string.h> // strlen(), memcpy()
+#include <string.h> // CAST(int)strlen(), memcpy()
 #include <strings.h> // bzero()
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -12,6 +12,10 @@
 #include <sys/types.h> // socket(), connect()
 #include <signal.h> // sigaction()
 #include <unistd.h> // alarm(), write(), read(), close(), pipe(), fork()
+
+#ifndef CAST
+#define CAST(type) (type)
+#endif // CAST
 
 // Define return status codes
 #define FAIL -1
@@ -102,7 +106,7 @@ void StrCopy(char *dest, int *dest_index, const char *src)
 // -1 means not find.
 int FindFirstSubstring(const char *src, const char *substr)
 {
-	int length = strlen(src);
+	int length = CAST(int)strlen(src);
 	for(int index = 0; index < length; ++index)
 	{
 		if(*(src + index) == *substr) // Match the begin character, continue match.
@@ -167,13 +171,14 @@ int TcpConnect(const char *host, int port)
 	struct sockaddr_in sa;
 	bzero(&sa, sizeof(sa));
 	sa.sin_family = AF_INET; // IPv4
-	sa.sin_port = htons(port);
+	sa.sin_port = htons(CAST(uint16_t)port);
 
+	// in_addr_t inet_addr(const char *cp);
 	// Return: 32-bit binary network byte ordered IPv4 address; INADDR_NONE if error
-	unsigned inaddr = inet_addr(host);
-	if(inaddr != INADDR_NONE) // If success, i.e., if host is IP address.
+	int inaddr = CAST(int)inet_addr(host);
+	if(CAST(unsigned)inaddr != INADDR_NONE) // If success, i.e., if host is IP address.
 	{
-		memcpy(&sa.sin_addr, &inaddr, sizeof(inaddr));
+		memcpy(&sa.sin_addr, &inaddr, CAST(size_t)sizeof(inaddr));
 	}
 	else // If host is "www.example.com"
 	{
@@ -182,7 +187,7 @@ int TcpConnect(const char *host, int port)
 		{
 			return FAIL;
 		}
-		memcpy(&sa.sin_addr, hp->h_addr, hp->h_length);
+		memcpy(&sa.sin_addr, hp->h_addr, CAST(size_t)(hp->h_length));
 	}
 
 	// Step 2. Create socket.
@@ -206,7 +211,7 @@ void alarm_handler(int signal)
 
 void HttpTransaction(const char *host, const int port, const char *request)
 {
-	int req_len = strlen(request), socket, read_bytes;
+	int req_len = CAST(int)strlen(request), socket, read_bytes;
 	char buf[MAX_BUF_SIZE];
 
 	for(int read_error = 0;;)
@@ -215,7 +220,7 @@ void HttpTransaction(const char *host, const int port, const char *request)
 		{
 			// When timer expired, os will send SIGALRM signal that will interrupt(errno = EINTR)
 			// slow system calls(connect, write, read and so on, see APUE.), that is, every time the
-			// timer expired, failed will increment by 1. So, when the timer expired and failed > 0, 
+			// timer expired, failed will increment by 1. So, when the timer expired and failed > 0,
 			// we should subtract one from failed that caused by timer expired.
 			if(failed > 0)
 			{
@@ -232,7 +237,8 @@ void HttpTransaction(const char *host, const int port, const char *request)
 			continue;
 		}
 		// Step 2. Send http request to the server.
-		if(req_len != write(socket, request, req_len))
+		// ssize_t write(int fd, const void *buf, size_t count);
+		if(req_len != write(socket, request, CAST(size_t)req_len))
 		{
 			//perror("write fail");
 			++failed;
@@ -244,7 +250,7 @@ void HttpTransaction(const char *host, const int port, const char *request)
 		{
 			for(; timer_expired == 0 && read_error == 0;) // Read all available data from socket
 			{
-				if((read_bytes = read(socket, buf, MAX_BUF_SIZE)) == FAIL) // read error
+				if((read_bytes = CAST(int)read(socket, buf, MAX_BUF_SIZE)) == FAIL) // read error
 				{
 					//perror("read error");
 					++failed;
@@ -323,7 +329,7 @@ void ParseArguments(int argc, char **argv) // Step 1. Parse arguments.
 				fprintf(stderr, "Error in option --proxy %s: Missing host name.\n", optarg);
 				exit(BAD_PARAMETER);
 			}
-			if(colon_index == strlen(optarg) - 1) // Input error: "name:", missing port.
+			if(colon_index == CAST(int)strlen(optarg) - 1) // Input error: "name:", missing port.
 			{
 				fprintf(stderr, "Error in option --proxy %s Port number is missing.\n", optarg);
 				exit(BAD_PARAMETER);
@@ -393,7 +399,7 @@ void BuildRequest(const char *url) // Step 2. Build http request message.
 		fprintf(stderr,"\nInvalid URL - host name must ends with '/'.\n");
 		exit(BAD_PARAMETER);
 	}
-	if(strlen(url) > MAX_URL_SIZE) // If url is too long.
+	if(CAST(int)strlen(url) > MAX_URL_SIZE) // If url is too long.
 	{
 		fprintf(stderr,"URL is too long.\n");
 		exit(BAD_PARAMETER);
@@ -613,7 +619,7 @@ void TestMain() // Step 5. Real test.
 			perror("sigaction(SIGALRM) error");
 			exit(INTERNAL_ERROR);
 		}
-		alarm(test_time);
+		alarm(CAST(unsigned int)test_time);
 
 		// Step 2. Preform HTTP Transaction: connect-> write request-> read reply->close.
 		HttpTransaction(proxy_host ? proxy_host : host, proxy_port, request);
